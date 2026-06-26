@@ -199,24 +199,31 @@ pip install -r requirements.txt
 
 ## Database Configuration
 
-Create a `.env` file in the project root.
+1. Install PostgreSQL.
 
-```env
-DATABASE_URL=postgresql://username:password@localhost:5432/gambia_garden_dvmp
+2. Create a database named:
+
+```
+gambia_garden_dvmp
 ```
 
-Run all migrations:
+3. Create a `.env` file in the project root and configure your PostgreSQL connection:
+
+```env
+DATABASE_URL=postgresql://<username>:<password>@localhost:5432/gambia_garden_dvmp
+```
+
+4. Apply all database migrations:
 
 ```bash
 alembic upgrade head
 ```
 
-Verify the latest migration:
+5. Verify the current migration version:
 
 ```bash
 alembic current
 ```
-
 ---
 
 ## Current Project Status
