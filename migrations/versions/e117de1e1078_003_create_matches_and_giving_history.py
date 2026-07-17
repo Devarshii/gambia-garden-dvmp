@@ -38,23 +38,23 @@ def upgrade() -> None:
     )
 
     op.create_table(
-        "giving_history",
-        sa.Column("gift_id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("donor_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("donors.donor_id"), nullable=False),
-        sa.Column("need_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("community_needs.need_id"), nullable=False),
-        sa.Column("match_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("matches.match_id"), nullable=False),
-        sa.Column("amount", sa.Numeric(12, 2), nullable=False),
-        sa.Column("in_kind_desc", sa.String(255), nullable=True),
-        sa.Column("channel", sa.String(50), nullable=False),
-        sa.Column("transaction_ref", sa.String(100), nullable=True),
-        sa.Column("impact_note", sa.Text(), nullable=True),
-        sa.Column("gift_date", sa.TIMESTAMP(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
-        sa.Column("created_at", sa.TIMESTAMP(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
-        sa.CheckConstraint(
-            "channel IN ('Sendwave', 'Wave', 'other')",
-            name="ck_giving_history_channel",
-        ),
-    )
+    "giving_history",
+    sa.Column("gift_id", postgresql.UUID(as_uuid=True), primary_key=True),
+    sa.Column("donor_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("donors.donor_id"), nullable=False),
+    sa.Column("need_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("community_needs.need_id"), nullable=True),
+    sa.Column("match_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("matches.match_id"), nullable=True),
+    sa.Column("amount", sa.Numeric(12, 2), nullable=False),
+    sa.Column("in_kind_desc", sa.String(255), nullable=True),
+    sa.Column("channel", sa.String(50), nullable=False),
+    sa.Column("transaction_ref", sa.String(100), nullable=True),
+    sa.Column("impact_note", sa.Text(), nullable=True),
+    sa.Column("gift_date", sa.TIMESTAMP(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+    sa.Column("created_at", sa.TIMESTAMP(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+    sa.CheckConstraint(
+        "channel IN ('Sendwave', 'Wave', 'other')",
+        name="ck_giving_history_channel",
+    ),
+)
 
     # Index supports filtering community needs by geography, category, urgency, and workflow status.
     op.create_index(
