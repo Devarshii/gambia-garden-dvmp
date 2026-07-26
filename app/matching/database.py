@@ -1,7 +1,12 @@
+import json
 import uuid
 
 from sqlalchemy import text
 
+
+# ---------------------------------------------------------
+# Match generation functions
+# ---------------------------------------------------------
 
 def match_exists(connection, donor_id, need_id):
     """
@@ -30,9 +35,10 @@ def insert_match(
     donor_id,
     need_id,
     match_score,
+    score_breakdown=None,
 ):
     """
-    Insert a new automatically generated match.
+    Insert a new automatically generated proposed match.
     """
     connection.execute(
         text(
@@ -42,14 +48,18 @@ def insert_match(
                 donor_id,
                 need_id,
                 match_type,
-                match_score
+                match_score,
+                score_breakdown,
+                status
             )
             VALUES (
                 :match_id,
                 :donor_id,
                 :need_id,
                 :match_type,
-                :match_score
+                :match_score,
+                CAST(:score_breakdown AS JSONB),
+                :status
             )
             """
         ),
@@ -59,6 +69,10 @@ def insert_match(
             "need_id": need_id,
             "match_type": "auto",
             "match_score": match_score,
+            "score_breakdown": json.dumps(
+                score_breakdown or {}
+            ),
+            "status": "proposed",
         },
     )
 
@@ -68,9 +82,13 @@ def update_match(
     donor_id,
     need_id,
     match_score,
+    score_breakdown=None,
 ):
     """
-    Update the score and date of an existing match.
+    Update an existing match's score, score breakdown,
+    and match date.
+
+    A confirmed or rejected decision is not overwritten.
     """
     connection.execute(
         text(
@@ -78,14 +96,201 @@ def update_match(
             UPDATE matches
             SET
                 match_score = :match_score,
-                match_date = CURRENT_TIMESTAMP
+                score_breakdown = CAST(
+                    :score_breakdown AS JSONB
+                ),
+                match_date = CURRENT_TIMESTAMP,
+                status = CASE
+                    WHEN status IS NULL THEN 'proposed'
+                    ELSE status
+                END
             WHERE donor_id = :donor_id
               AND need_id = :need_id
             """
         ),
         {
             "match_score": match_score,
+            "score_breakdown": json.dumps(
+                score_breakdown or {}
+            ),
             "donor_id": donor_id,
             "need_id": need_id,
         },
     )
+
+
+# ---------------------------------------------------------
+# Community needs functions
+# ---------------------------------------------------------
+
+def get_community_needs(connection):
+    """
+    Retrieve community needs along with region and category
+    information for the coordinator dashboard.
+    """
+    result = connection.execute(
+        text(
+            """
+            SELECT
+                cn.need_id,
+                cn.village,
+                r.region_name AS region,
+                c.label AS category,
+                cn.urgency,
+                cn.status,
+                cn.estimated_cost,
+                cn.created_at AS date_submitted,
+                cn.description,
+                cn.coordinator_notes,
+                cn.resolved_at
+            FROM community_needs cn
+            JOIN regions r
+                ON cn.region_id = r.region_id
+            JOIN categories c
+                ON cn.category_id = c.category_id
+            WHERE cn.status IN (
+                'open',
+                'matched',
+                'fulfilled'
+            )
+            ORDER BY cn.created_at DESC
+            """
+        )
+    )
+
+    return result.mappings().all()
+
+
+# ---------------------------------------------------------
+# Match review functions
+# ---------------------------------------------------------
+
+def get_proposed_matches(connection):
+    """
+    Retrieve matches that are waiting for coordinator review.
+
+    Only matches with a pending or proposed status are returned.
+    """
+    result = connection.execute(
+        text(
+            """
+            SELECT
+                m.match_id,
+                m.match_date,
+                m.match_type,
+                m.match_score,
+                m.score_breakdown,
+                m.status AS match_status,
+                m.coordinator_notes,
+
+                d.donor_id,
+                d.name AS donor_name,
+
+                cn.need_id,
+                cn.village,
+                cn.description,
+                cn.urgency,
+                cn.estimated_cost,
+                cn.status AS need_status,
+
+                r.region_name AS region,
+                c.label AS category
+
+            FROM matches m
+
+            JOIN donors d
+                ON m.donor_id = d.donor_id
+
+            JOIN community_needs cn
+                ON m.need_id = cn.need_id
+
+            JOIN regions r
+                ON cn.region_id = r.region_id
+
+            JOIN categories c
+                ON cn.category_id = c.category_id
+
+            WHERE m.status IN (
+                'pending',
+                'proposed'
+            )
+
+            ORDER BY
+                m.match_score DESC NULLS LAST,
+                m.match_date DESC
+            """
+        )
+    )
+
+    return result.mappings().all()
+
+
+def confirm_match(
+    connection,
+    match_id,
+    coordinator_notes=None,
+):
+    """
+    Confirm a proposed match.
+
+    Updates the status, coordinator notes,
+    and confirmed timestamp.
+    """
+    result = connection.execute(
+        text(
+            """
+            UPDATE matches
+            SET
+                status = 'confirmed',
+                coordinator_notes = :coordinator_notes,
+                confirmed_at = CURRENT_TIMESTAMP
+            WHERE match_id = :match_id
+              AND status IN (
+                  'pending',
+                  'proposed'
+              )
+            RETURNING match_id
+            """
+        ),
+        {
+            "match_id": match_id,
+            "coordinator_notes": coordinator_notes,
+        },
+    )
+
+    return result.fetchone()
+
+
+def reject_match(
+    connection,
+    match_id,
+    coordinator_notes=None,
+):
+    """
+    Reject a proposed match.
+
+    Updates the status and coordinator notes.
+    """
+    result = connection.execute(
+        text(
+            """
+            UPDATE matches
+            SET
+                status = 'rejected',
+                coordinator_notes = :coordinator_notes,
+                confirmed_at = NULL
+            WHERE match_id = :match_id
+              AND status IN (
+                  'pending',
+                  'proposed'
+              )
+            RETURNING match_id
+            """
+        ),
+        {
+            "match_id": match_id,
+            "coordinator_notes": coordinator_notes,
+        },
+    )
+
+    return result.fetchone()
