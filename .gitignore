@@ -10,3 +10,8 @@ __pycache__/
 
 # VS Code
 .vscode/
+# Sensitive input files
+app/input/
+
+# Generated ETL logs
+etl/rejection_log.csv
