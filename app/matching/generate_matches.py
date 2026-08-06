@@ -75,18 +75,19 @@ def generate_matches():
 
     Qualified matches are inserted when new and updated when
     the donor-to-need combination already exists.
+
+    Returns a summary dictionary for the Streamlit interface.
     """
     with engine.connect() as connection:
         donors = get_donors(connection)
         needs = get_community_needs(connection)
 
-    print(f"\nDonors found: {len(donors)}")
-    print(f"Open community needs found: {len(needs)}\n")
-
     qualified_matches = 0
     inserted_matches = 0
     updated_matches = 0
     skipped_matches = 0
+
+    total_combinations = len(donors) * len(needs)
 
     with engine.begin() as connection:
         for donor in donors:
@@ -125,12 +126,6 @@ def generate_matches():
 
                     updated_matches += 1
 
-                    print(
-                        f"Updated match | "
-                        f"Donor: {donor['name']} | "
-                        f"Need: {need['need_name']} | "
-                        f"Score: {total_score}"
-                    )
                 else:
                     insert_match(
                         connection=connection,
@@ -141,29 +136,27 @@ def generate_matches():
 
                     inserted_matches += 1
 
-                    print(
-                        f"New match | "
-                        f"Donor: {donor['name']} | "
-                        f"Need: {need['need_name']} | "
-                        f"Score: {total_score}"
-                    )
-
-                print(
-                    f"  Cause: {score_breakdown['cause_score']}, "
-                    f"Region: {score_breakdown['region_score']}, "
-                    f"Capacity: {score_breakdown['capacity_score']}, "
-                    f"Priority: {score_breakdown['priority_score']}, "
-                    f"History: {score_breakdown['history_score']}"
-                )
+    summary = {
+        "donors_scanned": len(donors),
+        "open_needs_scanned": len(needs),
+        "total_combinations": total_combinations,
+        "qualified_matches": qualified_matches,
+        "inserted_matches": inserted_matches,
+        "updated_matches": updated_matches,
+        "skipped_matches": skipped_matches,
+    }
 
     print("\n--------------------------------------")
-    print(f"Donors scanned: {len(donors)}")
-    print(f"Open needs scanned: {len(needs)}")
-    print(f"Qualified matches: {qualified_matches}")
-    print(f"Inserted: {inserted_matches}")
-    print(f"Updated: {updated_matches}")
-    print(f"Skipped below score 50: {skipped_matches}")
+    print(f"Donors scanned: {summary['donors_scanned']}")
+    print(f"Open needs scanned: {summary['open_needs_scanned']}")
+    print(f"Combinations evaluated: {summary['total_combinations']}")
+    print(f"Qualified matches: {summary['qualified_matches']}")
+    print(f"Inserted: {summary['inserted_matches']}")
+    print(f"Updated: {summary['updated_matches']}")
+    print(f"Skipped below score 50: {summary['skipped_matches']}")
     print("--------------------------------------\n")
+
+    return summary
 
 
 if __name__ == "__main__":

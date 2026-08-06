@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 # ---------------------------------------------------------
-# Add the project root to Python's import path
+# Add project root to Python path
 # ---------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -23,11 +23,14 @@ from app.matching.database import (
     get_proposed_matches,
     reject_match,
 )
-from app.matching.generate_matches import engine
+from app.matching.generate_matches import (
+    engine,
+    generate_matches,
+)
 
 
 # ---------------------------------------------------------
-# Streamlit page configuration
+# Streamlit configuration
 # ---------------------------------------------------------
 
 st.set_page_config(
@@ -39,7 +42,7 @@ st.set_page_config(
 
 
 # ---------------------------------------------------------
-# Database connection check
+# Database connection
 # ---------------------------------------------------------
 
 def check_database_connection():
@@ -51,7 +54,7 @@ def check_database_connection():
 
 
 # ---------------------------------------------------------
-# Community need update function
+# Update community need
 # ---------------------------------------------------------
 
 def update_community_need(
@@ -61,12 +64,8 @@ def update_community_need(
     coordinator_notes,
 ):
     """
-    Update the status and coordinator notes for a community need.
-
-    When the status becomes fulfilled, resolved_at is set
-    automatically. For other statuses, resolved_at is cleared.
+    Update the status and notes of a community need.
     """
-
     query = text(
         """
         UPDATE community_needs
@@ -108,7 +107,7 @@ def update_community_need(
 
 def format_currency(value):
     """
-    Format a numeric value as currency.
+    Format a value as currency.
     """
     if value is None or pd.isna(value):
         return "Not provided"
@@ -121,7 +120,7 @@ def format_currency(value):
 
 def prepare_score_breakdown(score_breakdown):
     """
-    Convert the score breakdown into a Python dictionary.
+    Convert a score breakdown into a dictionary.
     """
     if score_breakdown is None:
         return {}
@@ -144,7 +143,7 @@ def prepare_score_breakdown(score_breakdown):
 
 def display_score_breakdown(score_breakdown):
     """
-    Display the score breakdown by scoring category.
+    Display the score breakdown for a match.
     """
     breakdown = prepare_score_breakdown(score_breakdown)
 
@@ -158,7 +157,6 @@ def display_score_breakdown(score_breakdown):
     breakdown_records = []
 
     for category, score_data in breakdown.items():
-
         if isinstance(score_data, dict):
             category_score = score_data.get(
                 "score",
@@ -195,28 +193,26 @@ def display_score_breakdown(score_breakdown):
 
     breakdown_df = pd.DataFrame(breakdown_records)
 
-    columns_to_display = [
+    display_columns = [
         "Category",
         "Score",
     ]
 
     if breakdown_df["Weight"].notna().any():
-        columns_to_display.append("Weight")
+        display_columns.append("Weight")
 
-    explanations_exist = (
+    if (
         breakdown_df["Explanation"]
         .fillna("")
         .astype(str)
         .str.strip()
         .ne("")
         .any()
-    )
-
-    if explanations_exist:
-        columns_to_display.append("Explanation")
+    ):
+        display_columns.append("Explanation")
 
     st.dataframe(
-        breakdown_df[columns_to_display],
+        breakdown_df[display_columns],
         hide_index=True,
         use_container_width=True,
     )
@@ -228,7 +224,7 @@ def display_score_breakdown(score_breakdown):
 
 def show_open_needs():
     """
-    Display, filter and update community needs.
+    Display and manage community needs.
     """
     st.title("📋 Open Needs")
 
@@ -255,10 +251,6 @@ def show_open_needs():
 
     needs_df = pd.DataFrame(records)
 
-    # -----------------------------------------------------
-    # Verify required columns
-    # -----------------------------------------------------
-
     required_columns = [
         "need_id",
         "village",
@@ -278,19 +270,12 @@ def show_open_needs():
 
     if missing_columns:
         st.error(
-            "The community-needs query is missing required "
-            "columns."
+            "The community-needs query is missing "
+            "required columns."
         )
 
         st.code(", ".join(missing_columns))
-
-        st.caption(
-            "The get_community_needs() function must return "
-            "need_id and the other listed fields."
-        )
         return
-
-    # Add optional fields when not returned by the query.
 
     if "description" not in needs_df.columns:
         needs_df["description"] = None
@@ -300,10 +285,6 @@ def show_open_needs():
 
     if "resolved_at" not in needs_df.columns:
         needs_df["resolved_at"] = None
-
-    # -----------------------------------------------------
-    # Clean and prepare data
-    # -----------------------------------------------------
 
     needs_df["urgency"] = pd.to_numeric(
         needs_df["urgency"],
@@ -332,10 +313,6 @@ def show_open_needs():
         .str.lower()
         .str.strip()
     )
-
-    # -----------------------------------------------------
-    # Filters
-    # -----------------------------------------------------
 
     st.subheader("Filters")
 
@@ -391,12 +368,8 @@ def show_open_needs():
                 "open",
                 "matched",
             ],
-            format_func=lambda status: status.title(),
+            format_func=lambda value: value.title(),
         )
-
-    # -----------------------------------------------------
-    # Apply filters
-    # -----------------------------------------------------
 
     filtered_df = needs_df.copy()
 
@@ -426,16 +399,12 @@ def show_open_needs():
 
     filtered_df = filtered_df.reset_index(drop=True)
 
-    # -----------------------------------------------------
-    # Results table
-    # -----------------------------------------------------
-
     st.divider()
     st.subheader("Community Needs")
 
     st.caption(
         f"{len(filtered_df)} record(s) found. "
-        "Select a row to view and update its details."
+        "Select a row to view its details."
     )
 
     if filtered_df.empty:
@@ -499,10 +468,6 @@ def show_open_needs():
         },
     )
 
-    # -----------------------------------------------------
-    # Selected row details
-    # -----------------------------------------------------
-
     selected_rows = table_event.selection.rows
 
     if not selected_rows:
@@ -512,8 +477,7 @@ def show_open_needs():
         )
         return
 
-    selected_position = selected_rows[0]
-    selected_need = filtered_df.iloc[selected_position]
+    selected_need = filtered_df.iloc[selected_rows[0]]
 
     village = selected_need.get("village")
 
@@ -521,10 +485,7 @@ def show_open_needs():
         village = "Selected Community"
 
     st.divider()
-
-    st.subheader(
-        f"Need Details: {village}"
-    )
+    st.subheader(f"Need Details: {village}")
 
     detail_col1, detail_col2, detail_col3 = (
         st.columns(3)
@@ -583,15 +544,13 @@ def show_open_needs():
     ):
         st.write(description)
     else:
-        st.write(
-            "No description has been provided."
-        )
-
-    st.markdown("#### Current Coordinator Notes")
+        st.write("No description has been provided.")
 
     coordinator_notes = selected_need.get(
         "coordinator_notes"
     )
+
+    st.markdown("#### Current Coordinator Notes")
 
     if (
         coordinator_notes is not None
@@ -612,13 +571,7 @@ def show_open_needs():
             f"{resolved_at.strftime('%B %d, %Y at %I:%M %p')}"
         )
     else:
-        st.markdown(
-            "**Resolved At:** Not resolved"
-        )
-
-    # -----------------------------------------------------
-    # Need record management form
-    # -----------------------------------------------------
+        st.markdown("**Resolved At:** Not resolved")
 
     st.divider()
     st.subheader("✏️ Update Need Record")
@@ -627,8 +580,8 @@ def show_open_needs():
 
     if need_id is None or pd.isna(need_id):
         st.error(
-            "This record cannot be updated because its "
-            "need_id was not loaded."
+            "This record cannot be updated because "
+            "its need_id was not loaded."
         )
         return
 
@@ -669,10 +622,6 @@ def show_open_needs():
             options=allowed_statuses,
             index=0,
             format_func=lambda value: value.title(),
-            help=(
-                "A need can move from Open to Matched "
-                "and then to Fulfilled."
-            ),
         )
 
         new_notes = st.text_area(
@@ -713,11 +662,9 @@ def show_open_needs():
                     "Community need updated successfully."
                 )
                 st.rerun()
-
             else:
                 st.warning(
-                    "The community need could not be updated "
-                    "because the record was not found."
+                    "The community need could not be updated."
                 )
 
         except SQLAlchemyError as error:
@@ -733,7 +680,7 @@ def show_open_needs():
 
 def show_donor_profile():
     """
-    Display donor profile placeholder.
+    Display donor profile information.
     """
     st.title("👤 Donor Profile")
 
@@ -748,19 +695,133 @@ def show_donor_profile():
 
 
 # ---------------------------------------------------------
+# Matching Engine page
+# ---------------------------------------------------------
+
+def show_matching_engine():
+    """
+    Run the matching engine from the Streamlit interface.
+    """
+    st.title("⚙️ Matching Engine")
+
+    st.write(
+        "Run the donor-to-community matching process against "
+        "all currently open community needs."
+    )
+
+    st.info(
+        "The matching engine evaluates every donor against "
+        "every open need. Matches scoring 50 or higher are "
+        "created or updated."
+    )
+
+    run_clicked = st.button(
+        "▶ Run Matching Engine",
+        type="primary",
+        use_container_width=True,
+    )
+
+    if run_clicked:
+        try:
+            with st.spinner(
+                "Running the matching engine. Please wait..."
+            ):
+                summary = generate_matches()
+
+            st.success(
+                "Matching engine completed successfully."
+            )
+
+            st.subheader("Run Summary")
+
+            first_col, second_col, third_col = (
+                st.columns(3)
+            )
+
+            with first_col:
+                st.metric(
+                    "Donors Scanned",
+                    summary["donors_scanned"],
+                )
+
+            with second_col:
+                st.metric(
+                    "Open Needs Scanned",
+                    summary["open_needs_scanned"],
+                )
+
+            with third_col:
+                st.metric(
+                    "Combinations Evaluated",
+                    summary["total_combinations"],
+                )
+
+            fourth_col, fifth_col, sixth_col = (
+                st.columns(3)
+            )
+
+            with fourth_col:
+                st.metric(
+                    "New Matches Created",
+                    summary["inserted_matches"],
+                )
+
+            with fifth_col:
+                st.metric(
+                    "Existing Matches Updated",
+                    summary["updated_matches"],
+                )
+
+            with sixth_col:
+                st.metric(
+                    "Below Score 50",
+                    summary["skipped_matches"],
+                )
+
+            st.metric(
+                "Qualified Matches",
+                summary["qualified_matches"],
+            )
+
+            if summary["inserted_matches"] > 0:
+                st.success(
+                    f"{summary['inserted_matches']} new "
+                    "match(es) were added for review."
+                )
+            else:
+                st.info(
+                    "No new matches were created. Existing "
+                    "qualified matches may have been updated."
+                )
+
+        except SQLAlchemyError as error:
+            st.error(
+                "The matching engine could not complete "
+                "because of a database error."
+            )
+            st.caption(str(error))
+
+        except Exception as error:
+            st.error(
+                "An unexpected error occurred while running "
+                "the matching engine."
+            )
+            st.caption(str(error))
+
+
+# ---------------------------------------------------------
 # Match Review page
 # ---------------------------------------------------------
 
 def show_match_review():
     """
-    Display proposed and pending matches and allow coordinators
-    to confirm or reject them.
+    Display and review proposed matches.
     """
     st.title("🤝 Match Review")
 
     st.write(
         "Review proposed donor-to-community matches, inspect "
-        "their scores, add coordinator notes and make a decision."
+        "their scores, add notes and make a decision."
     )
 
     try:
@@ -803,7 +864,9 @@ def show_match_review():
 
         if match_score is not None:
             try:
-                score_label = f"{float(match_score):.2f}"
+                score_label = (
+                    f"{float(match_score):.2f}"
+                )
             except (TypeError, ValueError):
                 score_label = str(match_score)
         else:
@@ -969,11 +1032,9 @@ def show_match_review():
                             "Match confirmed successfully."
                         )
                         st.rerun()
-
                     else:
                         st.warning(
-                            "This match could not be confirmed. "
-                            "It may already have been reviewed."
+                            "This match could not be confirmed."
                         )
 
                 except SQLAlchemyError as error:
@@ -999,11 +1060,9 @@ def show_match_review():
                             "Match rejected successfully."
                         )
                         st.rerun()
-
                     else:
                         st.warning(
-                            "This match could not be rejected. "
-                            "It may already have been reviewed."
+                            "This match could not be rejected."
                         )
 
                 except SQLAlchemyError as error:
@@ -1014,7 +1073,7 @@ def show_match_review():
 
 
 # ---------------------------------------------------------
-# Main app
+# Main application
 # ---------------------------------------------------------
 
 def main():
@@ -1047,6 +1106,7 @@ def main():
         [
             "Open Needs",
             "Donor Profile",
+            "Run Matching Engine",
             "Match Review",
         ],
     )
@@ -1056,6 +1116,9 @@ def main():
 
     elif page == "Donor Profile":
         show_donor_profile()
+
+    elif page == "Run Matching Engine":
+        show_matching_engine()
 
     elif page == "Match Review":
         show_match_review()
