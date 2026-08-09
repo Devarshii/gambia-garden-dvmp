@@ -1,4 +1,5 @@
 import os
+from typing import Callable, Optional
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
@@ -19,6 +20,9 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL not found in .env file")
 
 engine = create_engine(DATABASE_URL)
+
+
+ProgressCallback = Optional[Callable[[str, str, float], None]]
 
 
 def get_donors(connection):
@@ -69,72 +73,161 @@ def get_community_needs(connection):
     return result.mappings().all()
 
 
-def generate_matches():
+def generate_matches(progress_callback: ProgressCallback = None):
     """
     Generate automatic donor-to-community-need matches.
 
-    Qualified matches are inserted when new and updated when
-    the donor-to-need combination already exists.
+    Qualified matches are inserted when new and updated when the
+    donor-to-need combination already exists.
 
-    Returns a summary dictionary for the Streamlit interface.
+    Parameters
+    ----------
+    progress_callback:
+        Optional function used by Streamlit or another interface.
+
+        The callback receives:
+        - stage name
+        - progress message
+        - progress value between 0.0 and 1.0
+
+    Returns
+    -------
+    dict
+        Structured summary of the matching run.
     """
-    with engine.connect() as connection:
-        donors = get_donors(connection)
-        needs = get_community_needs(connection)
+
+    def report_progress(stage, message, progress):
+        """
+        Send progress information when a callback is provided.
+        """
+        if progress_callback:
+            progress_callback(stage, message, progress)
+
+    donors = []
+    needs = []
 
     qualified_matches = 0
     inserted_matches = 0
     updated_matches = 0
     skipped_matches = 0
+    errors = 0
+
+    report_progress(
+        "loading_donors",
+        "Loading donors from the database...",
+        0.10,
+    )
+
+    with engine.connect() as connection:
+        donors = get_donors(connection)
+
+        report_progress(
+            "loading_needs",
+            "Loading open community needs...",
+            0.20,
+        )
+
+        needs = get_community_needs(connection)
 
     total_combinations = len(donors) * len(needs)
 
-    with engine.begin() as connection:
-        for donor in donors:
-            for need in needs:
-                score_breakdown = calculate_match_score(
-                    preferred_causes=donor["preferred_causes"],
-                    preferred_regions=donor["preferred_regions"],
-                    giving_capacity=donor["giving_capacity"],
-                    category_name=need["category_name"],
-                    region_name=need["region_name"],
-                    requested_amount=need["requested_amount"],
-                    priority=need["priority"],
-                )
+    report_progress(
+        "evaluating_matches",
+        "Evaluating donor and community-need combinations...",
+        0.30,
+    )
 
-                total_score = score_breakdown["total_score"]
+    try:
+        # engine.begin() creates one database transaction.
+        # If an exception occurs, SQLAlchemy automatically rolls it back.
+        with engine.begin() as connection:
+            combinations_processed = 0
 
-                if total_score < 50:
-                    skipped_matches += 1
-                    continue
+            for donor in donors:
+                for need in needs:
+                    combinations_processed += 1
 
-                qualified_matches += 1
+                    try:
+                        score_breakdown = calculate_match_score(
+                            preferred_causes=donor["preferred_causes"],
+                            preferred_regions=donor["preferred_regions"],
+                            giving_capacity=donor["giving_capacity"],
+                            category_name=need["category_name"],
+                            region_name=need["region_name"],
+                            requested_amount=need["requested_amount"],
+                            priority=need["priority"],
+                        )
 
-                existing_match = match_exists(
-                    connection=connection,
-                    donor_id=donor["donor_id"],
-                    need_id=need["need_id"],
-                )
+                        total_score = score_breakdown["total_score"]
 
-                if existing_match:
-                    update_match(
-                        connection=connection,
-                        donor_id=donor["donor_id"],
-                        need_id=need["need_id"],
-                        match_score=total_score,
-                    )
+                        if total_score < 50:
+                            skipped_matches += 1
+                        else:
+                            qualified_matches += 1
 
-                    updated_matches += 1
+                            existing_match = match_exists(
+                                connection=connection,
+                                donor_id=donor["donor_id"],
+                                need_id=need["need_id"],
+                            )
 
-                else:
-                    insert_match(
-                        connection=connection,
-                        donor_id=donor["donor_id"],
-                        need_id=need["need_id"],
-                        match_score=total_score,
-                    )
+                            if existing_match:
+                                update_match(
+                                    connection=connection,
+                                    donor_id=donor["donor_id"],
+                                    need_id=need["need_id"],
+                                    match_score=total_score,
+                                )
 
-                    inserted_matches += 1
+                                updated_matches += 1
+
+                            else:
+                                insert_match(
+                                    connection=connection,
+                                    donor_id=donor["donor_id"],
+                                    need_id=need["need_id"],
+                                    match_score=total_score,
+                                    score_breakdown=score_breakdown,
+                                )
+
+                                inserted_matches += 1
+
+                    except Exception:
+                        errors += 1
+                        raise
+
+                    if total_combinations > 0:
+                        evaluation_progress = (
+                            combinations_processed / total_combinations
+                        )
+
+                        overall_progress = 0.30 + (
+                            evaluation_progress * 0.60
+                        )
+
+                        report_progress(
+                            "evaluating_matches",
+                            (
+                                f"Evaluated {combinations_processed} of "
+                                f"{total_combinations} combinations..."
+                            ),
+                            min(overall_progress, 0.90),
+                        )
+
+        report_progress(
+            "completed",
+            "Matching engine completed successfully.",
+            1.0,
+        )
+
+    except Exception as error:
+        report_progress(
+            "failed",
+            f"Matching engine failed: {error}",
+            1.0,
+        )
+
+        raise
 
     summary = {
         "donors_scanned": len(donors),
@@ -144,6 +237,7 @@ def generate_matches():
         "inserted_matches": inserted_matches,
         "updated_matches": updated_matches,
         "skipped_matches": skipped_matches,
+        "errors": errors,
     }
 
     print("\n--------------------------------------")
@@ -154,6 +248,7 @@ def generate_matches():
     print(f"Inserted: {summary['inserted_matches']}")
     print(f"Updated: {summary['updated_matches']}")
     print(f"Skipped below score 50: {summary['skipped_matches']}")
+    print(f"Errors: {summary['errors']}")
     print("--------------------------------------\n")
 
     return summary

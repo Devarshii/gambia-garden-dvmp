@@ -700,7 +700,8 @@ def show_donor_profile():
 
 def show_matching_engine():
     """
-    Run the matching engine from the Streamlit interface.
+    Run the matching engine from the Streamlit interface
+    with progress tracking and concurrent-run protection.
     """
     st.title("⚙️ Matching Engine")
 
@@ -715,98 +716,215 @@ def show_matching_engine():
         "created or updated."
     )
 
+    # -----------------------------------------------------
+    # Initialize matching-engine state
+    # -----------------------------------------------------
+
+    if "matching_engine_running" not in st.session_state:
+        st.session_state.matching_engine_running = False
+
+    if "matching_engine_summary" not in st.session_state:
+        st.session_state.matching_engine_summary = None
+
+    if "matching_engine_error" not in st.session_state:
+        st.session_state.matching_engine_error = None
+
+    # -----------------------------------------------------
+    # Run button
+    # -----------------------------------------------------
+
     run_clicked = st.button(
         "▶ Run Matching Engine",
         type="primary",
         use_container_width=True,
+        disabled=st.session_state.matching_engine_running,
     )
 
     if run_clicked:
+        st.session_state.matching_engine_running = True
+        st.session_state.matching_engine_summary = None
+        st.session_state.matching_engine_error = None
+
+        st.rerun()
+
+    # -----------------------------------------------------
+    # Execute matching engine
+    # -----------------------------------------------------
+
+    if st.session_state.matching_engine_running:
+
+        st.warning(
+            "Matching engine is currently running. "
+            "Another run cannot be started until it finishes."
+        )
+
+        progress_bar = st.progress(0)
+
+        stage_message = st.empty()
+        progress_message = st.empty()
+
+        stage_names = {
+            "loading_donors": "Loading Donors",
+            "loading_needs": "Loading Community Needs",
+            "evaluating_matches": "Evaluating Matches",
+            "completed": "Completed",
+            "failed": "Failed",
+        }
+
+        def streamlit_progress_callback(
+            stage,
+            message,
+            progress,
+        ):
+            """
+            Receive progress updates from generate_matches()
+            and display them in Streamlit.
+            """
+            progress = max(
+                0.0,
+                min(float(progress), 1.0),
+            )
+
+            progress_bar.progress(
+                int(progress * 100)
+            )
+
+            readable_stage = stage_names.get(
+                stage,
+                stage.replace("_", " ").title(),
+            )
+
+            stage_message.markdown(
+                f"**Current Stage:** {readable_stage}"
+            )
+
+            progress_message.write(message)
+
         try:
-            with st.spinner(
-                "Running the matching engine. Please wait..."
-            ):
-                summary = generate_matches()
-
-            st.success(
-                "Matching engine completed successfully."
+            summary = generate_matches(
+                progress_callback=streamlit_progress_callback
             )
 
-            st.subheader("Run Summary")
-
-            first_col, second_col, third_col = (
-                st.columns(3)
+            st.session_state.matching_engine_summary = (
+                summary
             )
 
-            with first_col:
-                st.metric(
-                    "Donors Scanned",
-                    summary["donors_scanned"],
-                )
-
-            with second_col:
-                st.metric(
-                    "Open Needs Scanned",
-                    summary["open_needs_scanned"],
-                )
-
-            with third_col:
-                st.metric(
-                    "Combinations Evaluated",
-                    summary["total_combinations"],
-                )
-
-            fourth_col, fifth_col, sixth_col = (
-                st.columns(3)
+        except SQLAlchemyError as error:
+            st.session_state.matching_engine_error = (
+                "The matching engine could not complete "
+                "because of a database error.\n\n"
+                f"{error}"
             )
 
-            with fourth_col:
-                st.metric(
-                    "New Matches Created",
-                    summary["inserted_matches"],
-                )
+        except Exception as error:
+            st.session_state.matching_engine_error = (
+                "An unexpected error occurred while running "
+                "the matching engine.\n\n"
+                f"{error}"
+            )
 
-            with fifth_col:
-                st.metric(
-                    "Existing Matches Updated",
-                    summary["updated_matches"],
-                )
+        finally:
+            st.session_state.matching_engine_running = False
+            st.rerun()
 
-            with sixth_col:
-                st.metric(
-                    "Below Score 50",
-                    summary["skipped_matches"],
-                )
+    # -----------------------------------------------------
+    # Display error
+    # -----------------------------------------------------
 
+    if st.session_state.matching_engine_error:
+        st.error(
+            st.session_state.matching_engine_error
+        )
+
+    # -----------------------------------------------------
+    # Display run summary
+    # -----------------------------------------------------
+
+    summary = st.session_state.matching_engine_summary
+
+    if summary:
+        st.success(
+            "Matching engine completed successfully."
+        )
+
+        st.subheader("Run Summary")
+
+        first_col, second_col, third_col = (
+            st.columns(3)
+        )
+
+        with first_col:
+            st.metric(
+                "Donors Evaluated",
+                summary["donors_scanned"],
+            )
+
+        with second_col:
+            st.metric(
+                "Open Needs Evaluated",
+                summary["open_needs_scanned"],
+            )
+
+        with third_col:
+            st.metric(
+                "Combinations Evaluated",
+                summary["total_combinations"],
+            )
+
+        fourth_col, fifth_col, sixth_col = (
+            st.columns(3)
+        )
+
+        with fourth_col:
+            st.metric(
+                "New Matches Created",
+                summary["inserted_matches"],
+            )
+
+        with fifth_col:
+            st.metric(
+                "Existing Matches Updated",
+                summary["updated_matches"],
+            )
+
+        with sixth_col:
+            st.metric(
+                "Skipped Matches",
+                summary["skipped_matches"],
+            )
+
+        seventh_col, eighth_col = st.columns(2)
+
+        with seventh_col:
             st.metric(
                 "Qualified Matches",
                 summary["qualified_matches"],
             )
 
-            if summary["inserted_matches"] > 0:
-                st.success(
-                    f"{summary['inserted_matches']} new "
-                    "match(es) were added for review."
-                )
-            else:
-                st.info(
-                    "No new matches were created. Existing "
-                    "qualified matches may have been updated."
-                )
-
-        except SQLAlchemyError as error:
-            st.error(
-                "The matching engine could not complete "
-                "because of a database error."
+        with eighth_col:
+            st.metric(
+                "Errors",
+                summary["errors"],
             )
-            st.caption(str(error))
 
-        except Exception as error:
-            st.error(
-                "An unexpected error occurred while running "
-                "the matching engine."
+        if summary["inserted_matches"] > 0:
+            st.success(
+                f"{summary['inserted_matches']} new "
+                "match(es) were added for coordinator review."
             )
-            st.caption(str(error))
+
+        elif summary["updated_matches"] > 0:
+            st.info(
+                "No new matches were created, but "
+                f"{summary['updated_matches']} existing "
+                "qualified match(es) were updated."
+            )
+
+        else:
+            st.info(
+                "The matching run completed, but no new "
+                "or existing qualified matches required changes."
+            )
 
 
 # ---------------------------------------------------------
