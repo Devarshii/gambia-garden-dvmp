@@ -177,6 +177,7 @@ def generate_matches(progress_callback: ProgressCallback = None):
                                     donor_id=donor["donor_id"],
                                     need_id=need["need_id"],
                                     match_score=total_score,
+                                    score_breakdown=score_breakdown,
                                 )
 
                                 updated_matches += 1
