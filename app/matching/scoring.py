@@ -66,9 +66,10 @@ def calculate_cause_score(
     """
     Maximum: 35 points.
 
-    Full points are given when:
-    - the category exactly matches a preferred cause, or
-    - the donor selected all categories.
+    Scoring:
+    - exact preferred-category match: 35 points
+    - broad "all categories" preference: 15 points
+    - no match: 0 points
     """
     causes = normalize_list(preferred_causes)
     category = normalize_text(category_name)
@@ -80,11 +81,11 @@ def calculate_cause_score(
         "any cause",
     }
 
-    if any(value in causes for value in all_category_values):
-        return 35.0
-
     if category and category in causes:
         return 35.0
+
+    if any(value in causes for value in all_category_values):
+        return 15.0
 
     return 0.0
 
@@ -96,10 +97,10 @@ def calculate_region_score(
     """
     Maximum: 25 points.
 
-    Full points are given when:
-    - the region exactly matches a preferred region,
-    - the donor selected all regions, or
-    - no region preference was provided.
+    Scoring:
+    - exact preferred-region match: 25 points
+    - broad or missing region preference: 10 points
+    - no match: 0 points
     """
     regions = normalize_list(preferred_regions)
     region = normalize_text(region_name)
@@ -111,14 +112,14 @@ def calculate_region_score(
         "the gambia",
     }
 
-    if not regions:
-        return 25.0
-
-    if any(value in regions for value in all_region_values):
-        return 25.0
-
     if region and region in regions:
         return 25.0
+
+    if not regions:
+        return 10.0
+
+    if any(value in regions for value in all_region_values):
+        return 10.0
 
     return 0.0
 
@@ -133,7 +134,7 @@ def calculate_capacity_score(
     The score is based on how much of the estimated cost
     the donor can cover.
 
-    Unknown capacity currently receives 0 points.
+    Unknown capacity receives 0 points.
     """
     if giving_capacity is None:
         return 0.0
