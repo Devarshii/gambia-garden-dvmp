@@ -58,6 +58,8 @@ def get_community_needs(connection):
                 cn.description AS need_name,
                 cn.estimated_cost AS requested_amount,
                 cn.urgency AS priority,
+                cn.category_id,
+                cn.region_id,
                 c.category_code AS category_name,
                 r.region_name
             FROM community_needs cn
@@ -73,12 +75,42 @@ def get_community_needs(connection):
     return result.mappings().all()
 
 
+def get_giving_history(connection):
+    """
+    Read donor history with the category and region of each
+    community need that previously received a gift.
+
+    Records without a linked need cannot be used for category-
+    or region-based history scoring.
+    """
+    result = connection.execute(
+        text(
+            """
+            SELECT DISTINCT
+                gh.donor_id,
+                cn.category_id,
+                cn.region_id
+            FROM giving_history gh
+            JOIN community_needs cn
+                ON gh.need_id = cn.need_id
+            WHERE gh.need_id IS NOT NULL
+            """
+        )
+    )
+
+    return result.mappings().all()
+
+
 def generate_matches(progress_callback: ProgressCallback = None):
     """
     Generate automatic donor-to-community-need matches.
 
     Qualified matches are inserted when new and updated when the
     donor-to-need combination already exists.
+
+    Giving history contributes:
+    - 5 points for previous giving in the same category
+    - 5 points for previous giving in the same region
 
     Parameters
     ----------
@@ -105,6 +137,7 @@ def generate_matches(progress_callback: ProgressCallback = None):
 
     donors = []
     needs = []
+    giving_history = []
 
     qualified_matches = 0
     inserted_matches = 0
@@ -129,6 +162,24 @@ def generate_matches(progress_callback: ProgressCallback = None):
 
         needs = get_community_needs(connection)
 
+        report_progress(
+            "loading_history",
+            "Loading donor giving history...",
+            0.25,
+        )
+
+        giving_history = get_giving_history(connection)
+
+    category_history = {
+        (history["donor_id"], history["category_id"])
+        for history in giving_history
+    }
+
+    region_history = {
+        (history["donor_id"], history["region_id"])
+        for history in giving_history
+    }
+
     total_combinations = len(donors) * len(needs)
 
     report_progress(
@@ -148,6 +199,16 @@ def generate_matches(progress_callback: ProgressCallback = None):
                     combinations_processed += 1
 
                     try:
+                        same_category_history = (
+                            donor["donor_id"],
+                            need["category_id"],
+                        ) in category_history
+
+                        same_region_history = (
+                            donor["donor_id"],
+                            need["region_id"],
+                        ) in region_history
+
                         score_breakdown = calculate_match_score(
                             preferred_causes=donor["preferred_causes"],
                             preferred_regions=donor["preferred_regions"],
@@ -156,6 +217,8 @@ def generate_matches(progress_callback: ProgressCallback = None):
                             region_name=need["region_name"],
                             requested_amount=need["requested_amount"],
                             priority=need["priority"],
+                            same_category_history=same_category_history,
+                            same_region_history=same_region_history,
                         )
 
                         total_score = score_breakdown["total_score"]
@@ -233,6 +296,7 @@ def generate_matches(progress_callback: ProgressCallback = None):
     summary = {
         "donors_scanned": len(donors),
         "open_needs_scanned": len(needs),
+        "giving_history_records": len(giving_history),
         "total_combinations": total_combinations,
         "qualified_matches": qualified_matches,
         "inserted_matches": inserted_matches,
@@ -244,6 +308,10 @@ def generate_matches(progress_callback: ProgressCallback = None):
     print("\n--------------------------------------")
     print(f"Donors scanned: {summary['donors_scanned']}")
     print(f"Open needs scanned: {summary['open_needs_scanned']}")
+    print(
+        "Giving-history records loaded: "
+        f"{summary['giving_history_records']}"
+    )
     print(f"Combinations evaluated: {summary['total_combinations']}")
     print(f"Qualified matches: {summary['qualified_matches']}")
     print(f"Inserted: {summary['inserted_matches']}")
