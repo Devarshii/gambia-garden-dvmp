@@ -15,7 +15,9 @@ def match_exists(connection, donor_id, need_id):
     result = connection.execute(
         text(
             """
-            SELECT match_id
+            SELECT
+                match_id,
+                status
             FROM matches
             WHERE donor_id = :donor_id
               AND need_id = :need_id
@@ -27,7 +29,7 @@ def match_exists(connection, donor_id, need_id):
         },
     )
 
-    return result.fetchone()
+    return result.mappings().first()
 
 
 def insert_match(
@@ -88,7 +90,7 @@ def update_match(
     Update an existing match's score, score breakdown,
     and match date.
 
-    A confirmed or rejected decision is not overwritten.
+    A confirmed or rejected status is not overwritten.
     """
     connection.execute(
         text(
@@ -102,6 +104,7 @@ def update_match(
                 match_date = CURRENT_TIMESTAMP,
                 status = CASE
                     WHEN status IS NULL THEN 'proposed'
+                    WHEN status = 'not_qualified' THEN 'proposed'
                     ELSE status
                 END
             WHERE donor_id = :donor_id
@@ -117,6 +120,57 @@ def update_match(
             "need_id": need_id,
         },
     )
+
+
+def mark_match_not_qualified(
+    connection,
+    donor_id,
+    need_id,
+    match_score,
+    score_breakdown=None,
+):
+    """
+    Close an existing automated proposal when its recalculated
+    score falls below the matching threshold.
+
+    Confirmed and manually rejected decisions are not overwritten.
+    """
+    result = connection.execute(
+        text(
+            """
+            UPDATE matches
+            SET
+                match_score = :match_score,
+                score_breakdown = CAST(
+                    :score_breakdown AS JSONB
+                ),
+                match_date = CURRENT_TIMESTAMP,
+                status = 'not_qualified',
+                confirmed_at = NULL
+            WHERE donor_id = :donor_id
+              AND need_id = :need_id
+              AND (
+                  status IS NULL
+                  OR status IN (
+                      'pending',
+                      'proposed',
+                      'not_qualified'
+                  )
+              )
+            RETURNING match_id
+            """
+        ),
+        {
+            "match_score": match_score,
+            "score_breakdown": json.dumps(
+                score_breakdown or {}
+            ),
+            "donor_id": donor_id,
+            "need_id": need_id,
+        },
+    )
+
+    return result.fetchone()
 
 
 # ---------------------------------------------------------
@@ -231,10 +285,8 @@ def confirm_match(
     coordinator_notes=None,
 ):
     """
-    Confirm a proposed match.
-
-    Updates the status, coordinator notes,
-    and confirmed timestamp.
+    Confirm a proposed match and update the related community need
+    to matched in the same database transaction.
     """
     result = connection.execute(
         text(
@@ -249,7 +301,9 @@ def confirm_match(
                   'pending',
                   'proposed'
               )
-            RETURNING match_id
+            RETURNING
+                match_id,
+                need_id
             """
         ),
         {
@@ -258,7 +312,31 @@ def confirm_match(
         },
     )
 
-    return result.fetchone()
+    confirmed_match = result.mappings().first()
+
+    if not confirmed_match:
+        return None
+
+    connection.execute(
+        text(
+            """
+            UPDATE community_needs
+            SET
+                status = 'matched',
+                resolved_at = NULL
+            WHERE need_id = :need_id
+              AND status IN (
+                  'open',
+                  'matched'
+              )
+            """
+        ),
+        {
+            "need_id": confirmed_match["need_id"],
+        },
+    )
+
+    return confirmed_match
 
 
 def reject_match(

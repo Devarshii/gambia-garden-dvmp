@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, text
 
 from app.matching.database import (
     insert_match,
+    mark_match_not_qualified,
     match_exists,
     update_match,
 )
@@ -108,6 +109,10 @@ def generate_matches(progress_callback: ProgressCallback = None):
     Qualified matches are inserted when new and updated when the
     donor-to-need combination already exists.
 
+    Existing automated proposals that fall below the threshold
+    are marked not_qualified. Confirmed or manually rejected
+    decisions are not overwritten.
+
     Giving history contributes:
     - 5 points for previous giving in the same category
     - 5 points for previous giving in the same region
@@ -142,6 +147,7 @@ def generate_matches(progress_callback: ProgressCallback = None):
     qualified_matches = 0
     inserted_matches = 0
     updated_matches = 0
+    not_qualified_matches = 0
     skipped_matches = 0
     errors = 0
 
@@ -223,16 +229,29 @@ def generate_matches(progress_callback: ProgressCallback = None):
 
                         total_score = score_breakdown["total_score"]
 
+                        existing_match = match_exists(
+                            connection=connection,
+                            donor_id=donor["donor_id"],
+                            need_id=need["need_id"],
+                        )
+
                         if total_score < 50:
                             skipped_matches += 1
+
+                            if existing_match:
+                                closed_match = mark_match_not_qualified(
+                                    connection=connection,
+                                    donor_id=donor["donor_id"],
+                                    need_id=need["need_id"],
+                                    match_score=total_score,
+                                    score_breakdown=score_breakdown,
+                                )
+
+                                if closed_match:
+                                    not_qualified_matches += 1
+
                         else:
                             qualified_matches += 1
-
-                            existing_match = match_exists(
-                                connection=connection,
-                                donor_id=donor["donor_id"],
-                                need_id=need["need_id"],
-                            )
 
                             if existing_match:
                                 update_match(
@@ -301,6 +320,7 @@ def generate_matches(progress_callback: ProgressCallback = None):
         "qualified_matches": qualified_matches,
         "inserted_matches": inserted_matches,
         "updated_matches": updated_matches,
+        "not_qualified_matches": not_qualified_matches,
         "skipped_matches": skipped_matches,
         "errors": errors,
     }
@@ -316,6 +336,10 @@ def generate_matches(progress_callback: ProgressCallback = None):
     print(f"Qualified matches: {summary['qualified_matches']}")
     print(f"Inserted: {summary['inserted_matches']}")
     print(f"Updated: {summary['updated_matches']}")
+    print(
+        "Marked not qualified: "
+        f"{summary['not_qualified_matches']}"
+    )
     print(f"Skipped below score 50: {summary['skipped_matches']}")
     print(f"Errors: {summary['errors']}")
     print("--------------------------------------\n")

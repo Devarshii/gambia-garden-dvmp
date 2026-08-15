@@ -61,10 +61,13 @@ def update_community_need(
     connection,
     need_id,
     status,
-    coordinator_notes,
+    coordinator_notes=None,
 ):
     """
-    Update the status and notes of a community need.
+    Update a community need's status and coordinator notes.
+
+    When the need becomes fulfilled, set resolved_at and close any
+    remaining pending or proposed matches in the same transaction.
     """
     query = text(
         """
@@ -98,7 +101,32 @@ def update_community_need(
         },
     )
 
-    return result.mappings().first()
+    updated_need = result.mappings().first()
+
+    if not updated_need:
+        return None
+
+    if status == "fulfilled":
+        connection.execute(
+            text(
+                """
+                UPDATE matches
+                SET
+                    status = 'closed',
+                    confirmed_at = NULL
+                WHERE need_id = :need_id
+                  AND status IN (
+                      'pending',
+                      'proposed'
+                  )
+                """
+            ),
+            {
+                "need_id": need_id,
+            },
+        )
+
+    return updated_need
 
 
 # ---------------------------------------------------------
