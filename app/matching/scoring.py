@@ -3,27 +3,41 @@ from typing import Any
 
 def normalize_text(value: Any) -> str:
     """
-    Convert a value into clean lowercase text.
+    Convert a value into a consistent comparison format.
+
+    Normalization includes:
+    - converting text to lowercase
+    - replacing underscores and hyphens with spaces
+    - removing leading and trailing whitespace
+    - collapsing repeated spaces
     """
     if value is None:
         return ""
 
-    return str(value).strip().lower()
+    normalized_value = (
+        str(value)
+        .strip()
+        .lower()
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+
+    return " ".join(normalized_value.split())
 
 
 def normalize_list(values: Any) -> list[str]:
     """
     Convert arrays, lists, tuples, or comma-separated strings
-    into a clean lowercase list.
+    into a normalized list.
     """
     if values is None:
         return []
 
     if isinstance(values, (list, tuple)):
         return [
-            normalize_text(value)
+            normalized_value
             for value in values
-            if normalize_text(value)
+            if (normalized_value := normalize_text(value))
         ]
 
     if isinstance(values, str):
@@ -35,12 +49,14 @@ def normalize_list(values: Any) -> list[str]:
         cleaned_value = cleaned_value.strip("{}[]")
 
         return [
-            normalize_text(value)
+            normalized_value
             for value in cleaned_value.split(",")
-            if normalize_text(value)
+            if (normalized_value := normalize_text(value))
         ]
 
-    return [normalize_text(values)]
+    normalized_value = normalize_text(values)
+
+    return [normalized_value] if normalized_value else []
 
 
 def calculate_cause_score(
@@ -170,7 +186,7 @@ def calculate_priority_score(priority: Any) -> float:
         "urgent": 10.0,
         "high": 8.0,
         "medium": 5.0,
-        "medium-low": 4.0,
+        "medium low": 4.0,
         "low": 2.0,
     }
 
