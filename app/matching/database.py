@@ -41,8 +41,14 @@ def insert_match(
 ):
     """
     Insert a new automatically generated proposed match.
+
+    If another process creates the same donor-to-need match
+    concurrently, update its score safely instead of creating
+    a duplicate or failing the transaction.
+
+    Confirmed and rejected statuses are preserved.
     """
-    connection.execute(
+    result = connection.execute(
         text(
             """
             INSERT INTO matches (
@@ -63,6 +69,23 @@ def insert_match(
                 CAST(:score_breakdown AS JSONB),
                 :status
             )
+            ON CONFLICT (
+                donor_id,
+                need_id
+            )
+            DO UPDATE
+            SET
+                match_score = EXCLUDED.match_score,
+                score_breakdown = EXCLUDED.score_breakdown,
+                match_date = CURRENT_TIMESTAMP,
+                status = CASE
+                    WHEN matches.status IS NULL
+                        THEN 'proposed'
+                    WHEN matches.status = 'not_qualified'
+                        THEN 'proposed'
+                    ELSE matches.status
+                END
+            RETURNING match_id
             """
         ),
         {
@@ -77,6 +100,8 @@ def insert_match(
             "status": "proposed",
         },
     )
+
+    return result.fetchone()
 
 
 def update_match(
