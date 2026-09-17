@@ -1,3 +1,4 @@
+import hashlib
 import os
 import uuid
 from pathlib import Path
@@ -74,6 +75,49 @@ def clean_optional_text(value: Any) -> Optional[str]:
         return None
 
     return cleaned_value
+
+
+def generate_source_fingerprint(
+    donor_id,
+    gift_date,
+    amount,
+    transaction_ref,
+    impact_note,
+) -> str:
+    """
+    Generate a deterministic fingerprint for an imported
+    financial transaction.
+
+    The same normalized source transaction will always
+    produce the same SHA-256 fingerprint.
+    """
+    normalized_date = pd.Timestamp(
+        gift_date
+    ).strftime("%Y-%m-%d")
+
+    normalized_amount = f"{float(amount):.2f}"
+
+    normalized_transaction_ref = (
+        clean_optional_text(transaction_ref) or ""
+    ).lower()
+
+    normalized_impact_note = (
+        clean_optional_text(impact_note) or ""
+    ).lower()
+
+    fingerprint_source = "|".join(
+        [
+            str(donor_id),
+            normalized_date,
+            normalized_amount,
+            normalized_transaction_ref,
+            normalized_impact_note,
+        ]
+    )
+
+    return hashlib.sha256(
+        fingerprint_source.encode("utf-8")
+    ).hexdigest()
 
 
 def load_need_mapping() -> dict[str, str]:
@@ -211,12 +255,12 @@ def get_donor_id(connection):
     return donor[0]
 
 
-def validate_need_mapping(connection, need_mapping: dict[str, str]):
+def validate_need_mapping(
+    connection,
+    need_mapping: dict[str, str],
+):
     """
     Verify that every mapped need_id exists in community_needs.
-
-    This prevents the importer from linking a financial
-    transaction to a nonexistent community need.
     """
     if not need_mapping:
         return
@@ -263,11 +307,10 @@ def import_giving_history() -> dict:
     Historical transactions can be explicitly linked to
     community needs through giving_history_need_mapping.csv.
 
-    Unmapped transactions are still imported, but their
-    need_id remains NULL and they do not contribute to
-    category/region history scoring.
-
-    The import also skips records that already exist.
+    A deterministic source fingerprint is generated for each
+    imported transaction. PostgreSQL enforces uniqueness on
+    this fingerprint so concurrent imports cannot insert the
+    same source transaction twice.
     """
     if not CSV_PATH.exists():
         raise FileNotFoundError(
@@ -390,6 +433,14 @@ def import_giving_history() -> dict:
         else:
             unmapped_rows += 1
 
+        source_fingerprint = generate_source_fingerprint(
+            donor_id=donor_id,
+            gift_date=gift_date,
+            amount=amount,
+            transaction_ref=sending_details,
+            impact_note=receiving_details,
+        )
+
         clean_rows.append(
             {
                 "gift_id": str(uuid.uuid4()),
@@ -402,6 +453,7 @@ def import_giving_history() -> dict:
                 "transaction_ref": sending_details,
                 "impact_note": receiving_details,
                 "gift_date": gift_date.to_pydatetime(),
+                "source_fingerprint": source_fingerprint,
             }
         )
 
@@ -446,9 +498,10 @@ def import_giving_history() -> dict:
             channel,
             transaction_ref,
             impact_note,
-            gift_date
+            gift_date,
+            source_fingerprint
         )
-        SELECT
+        VALUES (
             :gift_id,
             :donor_id,
             :need_id,
@@ -458,18 +511,11 @@ def import_giving_history() -> dict:
             :channel,
             :transaction_ref,
             :impact_note,
-            :gift_date
-        WHERE NOT EXISTS (
-            SELECT 1
-            FROM giving_history existing
-            WHERE existing.donor_id = :donor_id
-              AND existing.amount = :amount
-              AND existing.gift_date = :gift_date
-              AND existing.transaction_ref
-                    IS NOT DISTINCT FROM :transaction_ref
-              AND existing.impact_note
-                    IS NOT DISTINCT FROM :impact_note
+            :gift_date,
+            :source_fingerprint
         )
+        ON CONFLICT (source_fingerprint)
+        DO NOTHING
         RETURNING gift_id
         """
     )
