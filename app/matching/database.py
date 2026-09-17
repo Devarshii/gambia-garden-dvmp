@@ -43,10 +43,11 @@ def insert_match(
     Insert a new automatically generated proposed match.
 
     If another process creates the same donor-to-need match
-    concurrently, update its score safely instead of creating
-    a duplicate or failing the transaction.
+    concurrently, update the score only when the existing
+    match has not already received a final coordinator decision.
 
-    Confirmed and rejected statuses are preserved.
+    Confirmed and rejected matches preserve their original
+    decision score and score breakdown.
     """
     result = connection.execute(
         text(
@@ -78,13 +79,13 @@ def insert_match(
                 match_score = EXCLUDED.match_score,
                 score_breakdown = EXCLUDED.score_breakdown,
                 match_date = CURRENT_TIMESTAMP,
-                status = CASE
-                    WHEN matches.status IS NULL
-                        THEN 'proposed'
-                    WHEN matches.status = 'not_qualified'
-                        THEN 'proposed'
-                    ELSE matches.status
-                END
+                status = 'proposed'
+            WHERE matches.status IS NULL
+               OR matches.status IN (
+                   'pending',
+                   'proposed',
+                   'not_qualified'
+               )
             RETURNING match_id
             """
         ),
@@ -113,11 +114,14 @@ def update_match(
 ):
     """
     Update an existing match's score, score breakdown,
-    and match date.
+    and match date only while the match is still eligible
+    for automatic recalculation.
 
-    A confirmed or rejected status is not overwritten.
+    Confirmed and rejected matches are not modified so the
+    score behind the coordinator's original decision remains
+    unchanged.
     """
-    connection.execute(
+    result = connection.execute(
         text(
             """
             UPDATE matches
@@ -134,6 +138,15 @@ def update_match(
                 END
             WHERE donor_id = :donor_id
               AND need_id = :need_id
+              AND (
+                  status IS NULL
+                  OR status IN (
+                      'pending',
+                      'proposed',
+                      'not_qualified'
+                  )
+              )
+            RETURNING match_id
             """
         ),
         {
@@ -145,6 +158,8 @@ def update_match(
             "need_id": need_id,
         },
     )
+
+    return result.fetchone()
 
 
 def mark_match_not_qualified(
@@ -312,6 +327,9 @@ def confirm_match(
     """
     Confirm a proposed match and update the related community need
     to matched in the same database transaction.
+
+    Once confirmed, later matching-engine recalculations will not
+    modify the match's stored decision score or score breakdown.
     """
     result = connection.execute(
         text(
@@ -372,7 +390,8 @@ def reject_match(
     """
     Reject a proposed match.
 
-    Updates the status and coordinator notes.
+    The coordinator decision and the score used for that
+    decision are preserved during future matching runs.
     """
     result = connection.execute(
         text(
