@@ -29,6 +29,10 @@ REJECTION_LOG_PATH = Path(
     "etl/rejection_log.csv"
 )
 
+NEED_MAPPING_PATH = Path(
+    "etl/giving_history_need_mapping.csv"
+)
+
 ALLOWED_CHANNELS = {
     "Sendwave",
     "Wave",
@@ -70,6 +74,79 @@ def clean_optional_text(value: Any) -> Optional[str]:
         return None
 
     return cleaned_value
+
+
+def load_need_mapping() -> dict[str, str]:
+    """
+    Load explicit transaction-to-community-need mappings.
+
+    The mapping CSV must contain:
+    transaction_ref,need_id
+
+    Transactions without a mapping remain unlinked.
+    """
+    if not NEED_MAPPING_PATH.exists():
+        return {}
+
+    mapping_dataframe = pd.read_csv(
+        NEED_MAPPING_PATH,
+        dtype=str,
+    )
+
+    required_columns = {
+        "transaction_ref",
+        "need_id",
+    }
+
+    missing_columns = (
+        required_columns - set(mapping_dataframe.columns)
+    )
+
+    if missing_columns:
+        missing_column_list = ", ".join(
+            sorted(missing_columns)
+        )
+
+        raise ValueError(
+            "Need mapping CSV is missing required columns: "
+            f"{missing_column_list}"
+        )
+
+    mapping = {}
+
+    for _, row in mapping_dataframe.iterrows():
+        transaction_ref = clean_optional_text(
+            row.get("transaction_ref")
+        )
+
+        need_id = clean_optional_text(
+            row.get("need_id")
+        )
+
+        if not transaction_ref or not need_id:
+            continue
+
+        try:
+            normalized_need_id = str(
+                uuid.UUID(need_id)
+            )
+        except ValueError as error:
+            raise ValueError(
+                "Invalid need_id in need mapping for "
+                f"transaction_ref '{transaction_ref}': "
+                f"{need_id}"
+            ) from error
+
+        if transaction_ref in mapping:
+            if mapping[transaction_ref] != normalized_need_id:
+                raise ValueError(
+                    "Conflicting mappings found for "
+                    f"transaction_ref '{transaction_ref}'."
+                )
+
+        mapping[transaction_ref] = normalized_need_id
+
+    return mapping
 
 
 def detect_channel(*values: Any) -> str:
@@ -134,6 +211,47 @@ def get_donor_id(connection):
     return donor[0]
 
 
+def validate_need_mapping(connection, need_mapping: dict[str, str]):
+    """
+    Verify that every mapped need_id exists in community_needs.
+
+    This prevents the importer from linking a financial
+    transaction to a nonexistent community need.
+    """
+    if not need_mapping:
+        return
+
+    mapped_need_ids = set(need_mapping.values())
+
+    result = connection.execute(
+        text(
+            """
+            SELECT need_id
+            FROM community_needs
+            """
+        )
+    )
+
+    existing_need_ids = {
+        str(row[0])
+        for row in result.fetchall()
+    }
+
+    missing_need_ids = (
+        mapped_need_ids - existing_need_ids
+    )
+
+    if missing_need_ids:
+        missing_list = ", ".join(
+            sorted(missing_need_ids)
+        )
+
+        raise ValueError(
+            "The following mapped need_id values do not "
+            f"exist in community_needs: {missing_list}"
+        )
+
+
 # ---------------------------------------------------------
 # Import logic
 # ---------------------------------------------------------
@@ -142,9 +260,14 @@ def import_giving_history() -> dict:
     """
     Import giving-history records from the finance CSV.
 
-    The import is idempotent: an existing record with the
-    same donor, date, amount, transaction reference, and
-    impact note is not inserted again.
+    Historical transactions can be explicitly linked to
+    community needs through giving_history_need_mapping.csv.
+
+    Unmapped transactions are still imported, but their
+    need_id remains NULL and they do not contribute to
+    category/region history scoring.
+
+    The import also skips records that already exist.
     """
     if not CSV_PATH.exists():
         raise FileNotFoundError(
@@ -177,13 +300,27 @@ def import_giving_history() -> dict:
             f"{missing_column_list}"
         )
 
+    need_mapping = load_need_mapping()
+
     with engine.connect() as connection:
         donor_id = get_donor_id(connection)
 
+        validate_need_mapping(
+            connection,
+            need_mapping,
+        )
+
     print(f"Found donor_id: {donor_id}")
+    print(
+        "Need mappings loaded: "
+        f"{len(need_mapping)}"
+    )
 
     clean_rows = []
     rejected_rows = []
+
+    mapped_rows = 0
+    unmapped_rows = 0
 
     for row_number, row in dataframe.iterrows():
         reasons = []
@@ -241,11 +378,23 @@ def import_giving_history() -> dict:
             rejected_rows.append(rejected_row)
             continue
 
+        mapped_need_id = None
+
+        if sending_details:
+            mapped_need_id = need_mapping.get(
+                sending_details
+            )
+
+        if mapped_need_id:
+            mapped_rows += 1
+        else:
+            unmapped_rows += 1
+
         clean_rows.append(
             {
                 "gift_id": str(uuid.uuid4()),
                 "donor_id": donor_id,
-                "need_id": None,
+                "need_id": mapped_need_id,
                 "match_id": None,
                 "amount": float(amount),
                 "in_kind_desc": None,
@@ -277,7 +426,6 @@ def import_giving_history() -> dict:
             f"{REJECTION_LOG_PATH}"
         )
     else:
-        # Remove an obsolete rejection log from a previous run.
         if REJECTION_LOG_PATH.exists():
             REJECTION_LOG_PATH.unlink()
 
@@ -333,7 +481,9 @@ def import_giving_history() -> dict:
                 clean_row,
             )
 
-            inserted_gift_id = result.scalar_one_or_none()
+            inserted_gift_id = (
+                result.scalar_one_or_none()
+            )
 
             if inserted_gift_id:
                 inserted_rows += 1
@@ -346,6 +496,8 @@ def import_giving_history() -> dict:
         "inserted_rows": inserted_rows,
         "duplicate_rows_skipped": duplicate_rows,
         "rejected_rows": len(rejected_rows),
+        "mapped_rows": mapped_rows,
+        "unmapped_rows": unmapped_rows,
     }
 
     print()
@@ -369,6 +521,14 @@ def import_giving_history() -> dict:
     print(
         "Rejected rows: "
         f"{summary['rejected_rows']}"
+    )
+    print(
+        "Rows mapped to needs: "
+        f"{summary['mapped_rows']}"
+    )
+    print(
+        "Rows without need mapping: "
+        f"{summary['unmapped_rows']}"
     )
     print("--------------------------------------")
     print("Import completed successfully.")

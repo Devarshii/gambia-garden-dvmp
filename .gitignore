@@ -15,3 +15,5 @@ app/input/
 
 # Generated ETL logs
 etl/rejection_log.csv
+
+etl/giving_history_need_mapping.csv
