@@ -1,280 +1,145 @@
 # Gambia Garden DVMP
 
-## Overview
+Gambia Garden DVMP is a donor-to-community-need matching platform designed to help coordinators connect donors with community needs based on donor preferences, geographic interests, giving capacity, urgency, and historical giving patterns.
 
-The **Gambia Garden Donor-Village Matching Platform (DVMP)** is a data-driven platform designed to connect donors with community needs through an intelligent matching system. The project provides a structured PostgreSQL database with version-controlled Alembic migrations and serves as the backend foundation for future analytics, ETL pipelines, and a Streamlit-based application.
-
----
-
-## Project Objectives
-
-* Build a scalable PostgreSQL database for donor management.
-* Track community needs and donation history.
-* Support intelligent donor-to-community matching.
-* Maintain version-controlled database migrations using Alembic.
-* Ensure database integrity through foreign keys and CHECK constraints.
-* Optimize query performance using indexes.
-* Provide a foundation for future analytics, reporting, and a Streamlit application.
+The project combines PostgreSQL, Alembic, Python, SQLAlchemy, and Streamlit to provide a structured and reviewable matching workflow.
 
 ---
 
-## Tech Stack
+## Features
 
-| Technology   | Purpose                       |
-| ------------ | ----------------------------- |
-| Python 3.12  | Programming Language          |
-| PostgreSQL   | Relational Database           |
-| SQLAlchemy   | ORM                           |
-| Alembic      | Database Migration Management |
-| Pandas       | Data Processing               |
-| Streamlit    | Future Web Application        |
-| Git & GitHub | Version Control               |
+### Donor and Community Need Management
+
+The PostgreSQL database stores and manages:
+
+- Donors
+- Community needs
+- Matches
+- Giving history
+- Coordinators
+- Categories
+- Regions
+- Matching run history
+
+Database changes are managed through Alembic migrations.
+
+### Matching Engine
+
+The matching engine evaluates donors against open community needs using a weighted scoring model.
+
+The score considers:
+
+- Preferred cause/category
+- Preferred region
+- Giving capacity
+- Need priority/urgency
+- Relevant giving history
+
+Each generated match stores both the total score and a score breakdown for transparency.
+
+### Coordinator Review
+
+The Streamlit coordinator interface allows users to:
+
+- View open community needs
+- Filter needs by region, category, urgency, and status
+- View donor information
+- Run the matching engine
+- Review proposed matches
+- Inspect score breakdowns
+- Confirm or reject proposed matches
+
+Confirmed and rejected coordinator decisions are protected from later matching-engine recalculations.
+
+### Giving History Import
+
+Historical transfer data can be imported through the ETL pipeline.
+
+The importer includes:
+
+- Donor lookup
+- Transfer-channel validation
+- Rejection logging
+- Optional mapping of historical transactions to community needs
+- Deterministic source fingerprints
+- Database-level duplicate protection
+- Idempotent imports
+
+Running the same source import multiple times does not create duplicate giving-history records.
+
+### Matching Run Safety and Observability
+
+Matching runs are tracked so that execution can be monitored and audited.
+
+Run information includes metrics such as:
+
+- Donors scanned
+- Open needs scanned
+- Giving-history records processed
+- Donor/need combinations evaluated
+- Qualified matches
+- Inserted matches
+- Updated matches
+- Skipped matches
+- Errors
+
+Concurrency protection prevents overlapping matching-engine runs.
+
+### Automated Testing and CI
+
+The project includes automated tests for:
+
+- Cause scoring
+- Region scoring
+- Giving-capacity scoring
+- Priority scoring
+- Giving-history scoring
+- Complete match-score calculation
+- Protection of confirmed/rejected match decisions
+
+GitHub Actions automatically runs the test suite on pushes and pull requests.
 
 ---
 
-## Repository Structure
+## Technology Stack
+
+- Python
+- PostgreSQL
+- SQLAlchemy
+- Alembic
+- Streamlit
+- Supabase
+- pandas
+- pytest
+- GitHub Actions
+
+---
+
+## Project Structure
 
 ```text
 gambia-garden-dvmp/
-│
-├── app/                  # Future Streamlit application
-├── docs/                 # Documentation (ERD, Data Dictionary, README)
-├── etl/                  # Data migration and ETL scripts
+├── .github/
+│   └── workflows/
+│       └── tests.yml
+├── app/
+│   ├── input/
+│   ├── matching/
+│   │   ├── database.py
+│   │   ├── generate_matches.py
+│   │   └── scoring.py
+│   └── main.py
+├── docs/
+│   ├── Data_Dictionary.md
+│   └── finance_spreadsheet_mapping.md
+├── etl/
+│   ├── import_giving_history.py
+│   └── giving_history_need_mapping.csv
 ├── migrations/
-│   ├── versions/         # Alembic migration files
-│   └── seeds/            # Seed scripts
-├── tests/                # Data quality and integrity tests
-├── README.md
-├── requirements.txt
+│   └── versions/
+├── tests/
+│   ├── test_match_decisions.py
+│   └── test_scoring.py
 ├── alembic.ini
-└── .env.example
-```
-
----
-
-## Database Schema
-
-The database consists of **7 tables**.
-
-### Core Tables
-
-* donors
-* community_needs
-* matches
-* giving_history
-
-### Supporting Tables
-
-* regions
-* categories
-* coordinators
-
-The complete Entity Relationship Diagram (ERD) and Data Dictionary are available in the **docs/** directory.
-
----
-
-## Database Migrations
-
-The schema is managed using **Alembic** to ensure version-controlled database changes.
-
-### Migration 001
-
-Created supporting tables:
-
-* regions
-* categories
-* coordinators
-
-### Migration 002
-
-Created core entities:
-
-* donors
-* community_needs
-
-### Migration 003
-
-Created:
-
-* matches
-* giving_history
-
-Also implemented:
-
-* Foreign key relationships
-* CHECK constraints
-* Query optimization indexes
-
----
-
-## Database Features
-
-### Primary Keys
-
-Every table uses UUID primary keys.
-
-### Foreign Keys
-
-Relationships are enforced between:
-
-* coordinators → regions
-* community_needs → regions
-* community_needs → categories
-* community_needs → coordinators
-* matches → donors
-* matches → community_needs
-* giving_history → donors
-* giving_history → community_needs
-* giving_history → matches
-
-### CHECK Constraints
-
-Implemented validation for:
-
-* Community need urgency (1–5)
-* Community need status (`open`, `matched`, `fulfilled`)
-* Match type (`manual`, `auto`)
-* Donation channel (`Sendwave`, `Wave`, `other`)
-
-### Indexes
-
-Indexes were created to improve query performance.
-
-**Community Needs**
-
-* region_id
-* category_id
-* urgency
-* status
-
-**Matches**
-
-* donor_id
-* need_id
-* status
-
-**Giving History**
-
-* donor_id
-* need_id
-
----
-
-## Environment Setup
-
-### Clone the Repository
-
-```bash
-git clone https://github.com/Devarshii/gambia-garden-dvmp.git
-cd gambia-garden-dvmp
-```
-
-### Create a Virtual Environment
-
-```bash
-python -m venv venv
-```
-
-### Activate the Environment
-
-Windows
-
-```bash
-venv\Scripts\activate
-```
-
-macOS / Linux
-
-```bash
-source venv/bin/activate
-```
-
-### Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## Database Configuration
-
-1. Install PostgreSQL.
-
-2. Create a database named:
-
-```
-gambia_garden_dvmp
-```
-
-3. Create a `.env` file in the project root and configure your PostgreSQL connection:
-
-```env
-DATABASE_URL=postgresql://<username>:<password>@localhost:5432/gambia_garden_dvmp
-```
-
-4. Apply all database migrations:
-
-```bash
-alembic upgrade head
-```
-
-5. Verify the current migration version:
-
-```bash
-alembic current
-```
----
-
-## Current Project Status
-
-* GitHub repository initialized
-* PostgreSQL configured
-* Alembic configured
-* Python virtual environment created
-* Project dependencies installed
-* Environment variables configured
-* Three Alembic migrations completed
-* Seven database tables implemented
-* Primary keys configured
-* Foreign key relationships implemented
-* CHECK constraints implemented
-* Database indexes created
-* Entity Relationship Diagram completed
-* Data Dictionary completed
-* Migration verification completed
-* Constraint validation completed
-
----
-
-## Verification
-
-The following validations have been successfully performed:
-
-* All migrations applied successfully using `alembic upgrade head`
-* Migration version verified using `alembic current`
-* All tables successfully created
-* Foreign key constraints verified
-* CHECK constraints verified
-* Indexes verified
-* Invalid inserts correctly rejected by PostgreSQL
-
----
-
-## Future Development
-
-* SQLAlchemy ORM models
-* ETL pipeline
-* Seed data generation
-* Streamlit dashboard
-* Matching engine implementation
-* Analytics dashboard
-* Data quality automation
-* Unit and integration tests
-
----
-
-## Author
-
-Devarshi Trivedi
-
+├── requirements.txt
+└── README.md
