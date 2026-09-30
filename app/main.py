@@ -1552,7 +1552,53 @@ def main():
             st.login()
 
         st.stop()
+    # ---------------------------------------------------------
+    # Coordinator authorization
+    # ---------------------------------------------------------
 
+    try:
+        with engine.connect() as connection:
+            coordinator = connection.execute(
+                text(
+                    """
+                    SELECT
+                        coord_id,
+                        name,
+                        email,
+                        region_id
+                    FROM coordinators
+                    WHERE LOWER(email) = LOWER(:email)
+                      AND is_active = true
+                    LIMIT 1
+                    """
+                ),
+                {"email": st.user.email},
+            ).mappings().first()
+
+    except SQLAlchemyError:
+        logger.exception("Coordinator authorization check failed")
+
+        st.error(
+            "Unable to verify your access right now. "
+            "Please try again later."
+        )
+        st.stop()
+
+    if coordinator is None:
+        logger.warning(
+            "Unauthorized application access attempt for email: %s",
+            st.user.email,
+        )
+
+        st.error(
+            "Your Google account is not authorized to access "
+            "the Gambia Garden coordinator application."
+        )
+
+        if st.button("Log out"):
+            st.logout()
+
+        st.stop()
     with st.sidebar:
         st.write(f"Signed in as **{st.user.email}**")
 
