@@ -736,20 +736,286 @@ def show_open_needs():
 
 def show_donor_profile():
     """
-    Display donor profile information.
+    Display donor profiles and donor-related activity.
     """
+
     st.title("👤 Donor Profile")
 
     st.write(
-        "Search and review donor information including "
-        "giving capacity, preferred causes and preferred regions."
+        "Search and review donor information, giving preferences, "
+        "giving capacity, match activity, and giving history."
     )
 
-    st.info(
-        "Donor profiles will appear here in the next task."
-    )
+    try:
+        # ---------------------------------------------------------
+        # Load donors
+        # ---------------------------------------------------------
 
+        with engine.connect() as connection:
+            donors_result = connection.execute(
+                text(
+                    """
+                    SELECT
+                        donor_id,
+                        name,
+                        email,
+                        location,
+                        interests,
+                        giving_capacity,
+                        preferred_causes,
+                        preferred_regions,
+                        created_at,
+                        updated_at
+                    FROM donors
+                    ORDER BY name
+                    """
+                )
+            )
 
+            donors = donors_result.mappings().all()
+
+        if not donors:
+            st.info("No donor profiles are currently available.")
+            return
+
+        # ---------------------------------------------------------
+        # Donor selector
+        # ---------------------------------------------------------
+
+        donor_options = {
+            f"{donor['name']} ({donor['email']})": donor
+            for donor in donors
+        }
+
+        selected_label = st.selectbox(
+            "Select donor",
+            options=list(donor_options.keys()),
+        )
+
+        donor = donor_options[selected_label]
+        donor_id = donor["donor_id"]
+
+        st.divider()
+
+        # ---------------------------------------------------------
+        # Basic donor information
+        # ---------------------------------------------------------
+
+        st.subheader(donor["name"])
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.markdown("**Email**")
+            st.write(donor["email"])
+
+        with col2:
+            st.markdown("**Location**")
+            st.write(donor["location"] or "Not provided")
+
+        with col3:
+            st.markdown("**Giving Capacity**")
+
+            giving_capacity = donor["giving_capacity"]
+
+            if giving_capacity is not None:
+                st.write(f"${float(giving_capacity):,.2f}")
+            else:
+                st.write("Not provided")
+
+        # ---------------------------------------------------------
+        # Donor preferences
+        # ---------------------------------------------------------
+
+        st.subheader("Preferences")
+
+        preference_col1, preference_col2, preference_col3 = st.columns(3)
+
+        interests = donor["interests"] or []
+        preferred_causes = donor["preferred_causes"] or []
+        preferred_regions = donor["preferred_regions"] or []
+
+        with preference_col1:
+            st.markdown("**Interests**")
+
+            if interests:
+                for interest in interests:
+                    st.write(f"• {interest}")
+            else:
+                st.write("None specified")
+
+        with preference_col2:
+            st.markdown("**Preferred Causes**")
+
+            if preferred_causes:
+                for cause in preferred_causes:
+                    st.write(f"• {cause}")
+            else:
+                st.write("None specified")
+
+        with preference_col3:
+            st.markdown("**Preferred Regions**")
+
+            if preferred_regions:
+                for region in preferred_regions:
+                    st.write(f"• {region}")
+            else:
+                st.write("None specified")
+
+        st.divider()
+
+        # ---------------------------------------------------------
+        # Match activity
+        # ---------------------------------------------------------
+
+        st.subheader("Match Activity")
+
+        with engine.connect() as connection:
+            matches_result = connection.execute(
+                text(
+                    """
+                    SELECT
+                        m.match_id,
+                        m.match_date,
+                        m.match_score,
+                        m.status,
+                        cn.description AS community_need,
+                        c.category_code AS category_name,
+                        r.region_name
+                    FROM matches m
+                    JOIN community_needs cn
+                        ON cn.need_id = m.need_id
+                    LEFT JOIN categories c
+                        ON c.category_id = cn.category_id
+                    LEFT JOIN regions r
+                        ON r.region_id = cn.region_id
+                    WHERE m.donor_id = :donor_id
+                    ORDER BY m.match_date DESC
+                    """
+                ),
+                {"donor_id": donor_id},
+            )
+
+            matches = matches_result.mappings().all()
+
+        if matches:
+            matches_df = pd.DataFrame(matches)
+
+            matches_df = matches_df[
+                [
+                    "community_need",
+                    "category_name",
+                    "region_name",
+                    "match_score",
+                    "status",
+                    "match_date",
+                ]
+            ]
+
+            matches_df = matches_df.rename(
+                columns={
+                    "community_need": "Community Need",
+                    "category_name": "Category",
+                    "region_name": "Region",
+                    "match_score": "Score",
+                    "status": "Status",
+                    "match_date": "Match Date",
+                }
+            )
+
+            st.dataframe(
+                matches_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        else:
+            st.info(
+                "No matching activity is currently recorded for this donor."
+            )
+
+        # ---------------------------------------------------------
+        # Giving history
+        # ---------------------------------------------------------
+
+        st.subheader("Giving History")
+
+        with engine.connect() as connection:
+            history_result = connection.execute(
+                text(
+                    """
+                    SELECT
+                        gh.gift_date,
+                        gh.amount,
+                        cn.description AS community_need
+                    FROM giving_history gh
+                    LEFT JOIN community_needs cn
+                        ON cn.need_id = gh.need_id
+                    WHERE gh.donor_id = :donor_id
+                    ORDER BY gh.gift_date DESC
+                    """
+                ),
+                {"donor_id": donor_id},
+            )
+
+            giving_history = history_result.mappings().all()
+
+        if giving_history:
+            history_df = pd.DataFrame(giving_history)
+
+            history_df = history_df[
+                [
+                    "gift_date",
+                    "amount",
+                    "community_need",
+                ]
+            ]
+
+            history_df = history_df.rename(
+                columns={
+                    "gift_date": "Gift Date",
+                    "amount": "Amount",
+                    "community_need": "Community Need",
+                }
+            )
+
+            st.dataframe(
+                history_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            total_given = sum(
+                float(record["amount"])
+                for record in giving_history
+                if record["amount"] is not None
+            )
+
+            st.metric(
+                "Total Giving Recorded",
+                f"${total_given:,.2f}",
+            )
+
+        else:
+            st.info(
+                "No giving history is currently recorded for this donor."
+            )
+
+    except SQLAlchemyError:
+        logger.exception("Failed to load donor profile")
+        st.error(
+            "Unable to load the donor profile right now. "
+            "Please try again later."
+        )
+
+    except Exception:
+        logger.exception(
+            "Unexpected error while loading donor profile"
+        )
+        st.error(
+            "Something went wrong while loading the donor profile. "
+            "Please try again later."
+        )
 # ---------------------------------------------------------
 # Matching Engine page
 # ---------------------------------------------------------
