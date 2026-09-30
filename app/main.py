@@ -1,6 +1,20 @@
 import json
+import logging
 import sys
 from pathlib import Path
+
+
+# ---------------------------------------------------------
+# Logging
+# ---------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------
 # Add project root to Python path
@@ -23,6 +37,7 @@ from app.matching.database import (
     get_proposed_matches,
     reject_match,
 )
+
 from app.matching.generate_matches import (
     engine,
     generate_matches,
@@ -265,12 +280,15 @@ def show_open_needs():
         with engine.connect() as connection:
             records = get_community_needs(connection)
 
-    except SQLAlchemyError as error:
+    except SQLAlchemyError:
+        logger.exception(
+            "Database error while loading community needs."
+        )
+
         st.error(
             "Community needs could not be loaded "
             "from the database."
         )
-        st.caption(str(error))
         return
 
     if not records:
@@ -297,12 +315,15 @@ def show_open_needs():
     ]
 
     if missing_columns:
-        st.error(
-            "The community-needs query is missing "
-            "required columns."
+        logger.error(
+            "Community-needs query missing required columns: %s",
+            ", ".join(missing_columns),
         )
 
-        st.code(", ".join(missing_columns))
+        st.error(
+            "The community-needs data could not be displayed "
+            "because required information is unavailable."
+        )
         return
 
     if "description" not in needs_df.columns:
@@ -607,9 +628,12 @@ def show_open_needs():
     need_id = selected_need.get("need_id")
 
     if need_id is None or pd.isna(need_id):
+        logger.error(
+            "Community need record was loaded without need_id."
+        )
+
         st.error(
-            "This record cannot be updated because "
-            "its need_id was not loaded."
+            "This record cannot be updated at this time."
         )
         return
 
@@ -695,11 +719,15 @@ def show_open_needs():
                     "The community need could not be updated."
                 )
 
-        except SQLAlchemyError as error:
+        except SQLAlchemyError:
+            logger.exception(
+                "Database error while updating community need %s.",
+                need_id,
+            )
+
             st.error(
                 "The community need could not be updated."
             )
-            st.caption(str(error))
 
 
 # ---------------------------------------------------------
@@ -837,18 +865,24 @@ def show_matching_engine():
                 summary
             )
 
-        except SQLAlchemyError as error:
-            st.session_state.matching_engine_error = (
-                "The matching engine could not complete "
-                "because of a database error.\n\n"
-                f"{error}"
+        except SQLAlchemyError:
+            logger.exception(
+                "Database error while running matching engine."
             )
 
-        except Exception as error:
+            st.session_state.matching_engine_error = (
+                "The matching engine could not complete "
+                "because of a database error."
+            )
+
+        except Exception:
+            logger.exception(
+                "Unexpected error while running matching engine."
+            )
+
             st.session_state.matching_engine_error = (
                 "An unexpected error occurred while running "
-                "the matching engine.\n\n"
-                f"{error}"
+                "the matching engine."
             )
 
         finally:
@@ -974,12 +1008,15 @@ def show_match_review():
         with engine.connect() as connection:
             matches = get_proposed_matches(connection)
 
-    except SQLAlchemyError as error:
+    except SQLAlchemyError:
+        logger.exception(
+            "Database error while loading proposed matches."
+        )
+
         st.error(
             "Proposed matches could not be loaded "
             "from the database."
         )
-        st.caption(str(error))
         return
 
     if not matches:
@@ -1183,11 +1220,15 @@ def show_match_review():
                             "This match could not be confirmed."
                         )
 
-                except SQLAlchemyError as error:
+                except SQLAlchemyError:
+                    logger.exception(
+                        "Database error while confirming match %s.",
+                        match_id,
+                    )
+
                     st.error(
                         "The match could not be confirmed."
                     )
-                    st.caption(str(error))
 
             if reject_clicked:
                 try:
@@ -1211,11 +1252,15 @@ def show_match_review():
                             "This match could not be rejected."
                         )
 
-                except SQLAlchemyError as error:
+                except SQLAlchemyError:
+                    logger.exception(
+                        "Database error while rejecting match %s.",
+                        match_id,
+                    )
+
                     st.error(
                         "The match could not be rejected."
                     )
-                    st.caption(str(error))
 
 
 # ---------------------------------------------------------
@@ -1230,17 +1275,24 @@ def main():
         check_database_connection()
 
     except SQLAlchemyError:
+        logger.exception(
+            "Database connection check failed."
+        )
+
         st.error(
-            "Unable to connect to the database.\n\n"
-            "Please verify that PostgreSQL is running and "
-            "your DATABASE_URL in the .env file is correct."
+            "Unable to connect to the database. "
+            "Please try again later."
         )
         st.stop()
 
-    except Exception as error:
+    except Exception:
+        logger.exception(
+            "Unexpected error during database connection check."
+        )
+
         st.error(
-            "An unexpected database error occurred.\n\n"
-            f"{error}"
+            "An unexpected error occurred while connecting "
+            "to the application database."
         )
         st.stop()
 
