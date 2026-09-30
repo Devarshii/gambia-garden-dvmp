@@ -17,3 +17,4 @@ app/input/
 etl/rejection_log.csv
 
 etl/giving_history_need_mapping.csv
+.streamlit/secrets.toml

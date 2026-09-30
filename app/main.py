@@ -1537,6 +1537,27 @@ def main():
     """
     Run the Streamlit application.
     """
+    # ---------------------------------------------------------
+    # Authentication
+    # ---------------------------------------------------------
+
+    if not st.user.is_logged_in:
+        st.title("🔐 Gambia Garden DVMP")
+        st.write(
+            "Please sign in with an authorized Google account "
+            "to access the coordinator application."
+        )
+
+        if st.button("Sign in with Google"):
+            st.login()
+
+        st.stop()
+
+    with st.sidebar:
+        st.write(f"Signed in as **{st.user.email}**")
+
+        if st.button("Log out"):
+            st.logout()
     try:
         check_database_connection()
 
