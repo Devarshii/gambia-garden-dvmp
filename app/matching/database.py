@@ -319,18 +319,75 @@ def get_proposed_matches(connection):
     return result.mappings().all()
 
 
+
 def confirm_match(
     connection,
     match_id,
     coordinator_notes=None,
 ):
     """
-    Confirm a proposed match and update the related community need
-    to matched in the same database transaction.
+    Confirm one match per community need.
 
-    Once confirmed, later matching-engine recalculations will not
-    modify the match's stored decision score or score breakdown.
+    Lock the community need to serialize competing confirmations.
+    Confirm the selected match, reject competing proposals, and
+    update the need within the caller's transaction.
     """
+
+    # Identify the community need for this match.
+    match_result = connection.execute(
+        text(
+            """
+            SELECT need_id
+            FROM matches
+            WHERE match_id = :match_id
+            """
+        ),
+        {"match_id": match_id},
+    ).mappings().first()
+
+    if match_result is None:
+        return None
+
+    need_id = match_result["need_id"]
+
+    # Lock the parent need before changing any match decisions.
+    # Concurrent confirmations for this need must wait.
+    need_result = connection.execute(
+        text(
+            """
+            SELECT need_id, status
+            FROM community_needs
+            WHERE need_id = :need_id
+            FOR UPDATE
+            """
+        ),
+        {"need_id": need_id},
+    ).mappings().first()
+
+    if need_result is None:
+        return None
+
+    if need_result["status"] != "open":
+        return None
+
+    # Prevent confirmation if a confirmed match already exists.
+    existing = connection.execute(
+        text(
+            """
+            SELECT match_id
+            FROM matches
+            WHERE need_id = :need_id
+              AND status = 'confirmed'
+            LIMIT 1
+            """
+        ),
+        {"need_id": need_id},
+    ).first()
+
+    if existing is not None:
+        return None
+
+    # Confirm the selected proposal.
     result = connection.execute(
         text(
             """
@@ -340,26 +397,43 @@ def confirm_match(
                 coordinator_notes = :coordinator_notes,
                 confirmed_at = CURRENT_TIMESTAMP
             WHERE match_id = :match_id
-              AND status IN (
-                  'pending',
-                  'proposed'
-              )
-            RETURNING
-                match_id,
-                need_id
+              AND need_id = :need_id
+              AND status IN ('pending', 'proposed')
+            RETURNING match_id, need_id
             """
         ),
         {
             "match_id": match_id,
+            "need_id": need_id,
             "coordinator_notes": coordinator_notes,
         },
     )
 
     confirmed_match = result.mappings().first()
 
-    if not confirmed_match:
+    if confirmed_match is None:
         return None
 
+    # Close all competing proposals for the same need.
+    connection.execute(
+        text(
+            """
+            UPDATE matches
+            SET
+                status = 'rejected',
+                confirmed_at = NULL
+            WHERE need_id = :need_id
+              AND match_id <> :match_id
+              AND status IN ('pending', 'proposed')
+            """
+        ),
+        {
+            "need_id": need_id,
+            "match_id": match_id,
+        },
+    )
+
+    # Mark the community need as matched.
     connection.execute(
         text(
             """
@@ -368,15 +442,10 @@ def confirm_match(
                 status = 'matched',
                 resolved_at = NULL
             WHERE need_id = :need_id
-              AND status IN (
-                  'open',
-                  'matched'
-              )
+              AND status = 'open'
             """
         ),
-        {
-            "need_id": confirmed_match["need_id"],
-        },
+        {"need_id": need_id},
     )
 
     return confirmed_match
